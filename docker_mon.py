@@ -1,48 +1,57 @@
-#!/usr/bin/python
-
-# All SSH libraries for Python are junk (2011-10-13).
-# Too low-level (libssh2), too buggy (paramiko), too complicated
-# (both), too poor in features (no use of the agent, for instance)
-
-# Here is the right solution today:
-
+#!/usr/bin/python3
 import re
 import subprocess
 import sys
+import smtplib
+import settings
 
-HOST="alphocker.dawson"
-#CONTAINER="mfgtransovpnproxy"
-CONTAINER="digikam"
-# Ports are handled in ~/.ssh/config since we use OpenSSH
-#COMMAND = f"docker container inspect {CONTAINER}"
-#docker ps --filter "name=mfgtransovpnproxy" --format "{{.ID}}: {{.Status}}"
+def send_notice(name, state):
+	conn = smtplib.SMTP(settings.SMTP_SERVER)
+	conn.set_debuglevel(False)
+	conn.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+	try:
+		body = f"The docker container named '{name}' is in state '{state}' and not healthy."
+		message = f"Subject: {name} container is not healthy\n\n{body}"
+		conn.sendmail(settings.EMAIL_FROM, settings.RECIPIENTS, message)
+	except Exception as exc:
+		print(exc)
+	finally:
+		conn.quit()
+
+state = None
+health = None
 TEMPLATE = '{{.Names}}\t{{.ID}}\t{{.Status}}'
-#COMMAND = 'docker ps --all --filter "name=mfgtransovpnproxy" --format "{{.Names}}\t{{.ID}}\t{{.Status}}"'
-COMMAND = f'docker ps --all --filter "name={CONTAINER}" --format "{TEMPLATE}"'
+COMMAND = f'docker ps --all --filter "name={settings.CONTAINER}" --format "{TEMPLATE}"'
 
-ssh = subprocess.Popen(["ssh", HOST, COMMAND],
-                       shell=False, 
-                       stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE)
+ssh = subprocess.Popen(["ssh", settings.HOST, COMMAND],
+					   shell=False, 
+					   stdout=subprocess.PIPE,
+					   stderr=subprocess.PIPE)
 result = ssh.stdout.readlines()
 if result == []:
-    error = ssh.stderr.readlines()
-    print(f"ERROR: {error}")
+	#error = ssh.stderr.readlines()
+	send_notice(settings.CONTAINER, 'not found')
+	#print(f"ERROR: {error}")
 else:
-    health_pattern = r"[^\(]+\((.*?)\)"
-    state_pattern = r"^(.*?)\s+"
-    for line in result:
-        (names, id, status) = line.decode("utf-8").split("\t")
-        if names == CONTAINER:
-            m = re.search(state_pattern, status)
-            state = None
-            if m
-            m = re.search(health_pattern, status)
-            if m:
-                health = m.group(1)
-            else:
-                pass # no health!
-        print(line.decode("utf-8"))
-    output = [x.decode("utf-8") for x in result]
-    print(output)
-    
+	health_pattern = r"[^\(]+\((.*?)\)"
+	state_pattern = r"^(.*?)\s+"
+	for line in result:
+		(names, id, status) = line.decode("utf-8").split("\t")
+		if names == settings.CONTAINER:
+			m = re.search(state_pattern, status)
+			if m:
+				state = m.group(1).lower()
+				if state == 'up':
+					m = re.search(health_pattern, status)
+					if m:
+						health = m.group(1).lower()
+					else:
+						pass # no health!
+			break
+		print(line.decode("utf-8"))
+	if health != 'healthy':
+		send_notice(settings.CONTAINER, state)
+
+	#output = [x.decode("utf-8") for x in result]
+	#print(output)
+	
